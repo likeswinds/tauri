@@ -2,20 +2,27 @@ name: 'publish-tauri-arm64'
 
 on:
   workflow_dispatch:
+
 jobs:
   build-tauri-arm64:
     permissions:
       contents: write
-    strategy:
-      fail-fast: false
-      matrix:
-        platform: [ubuntu-22.04]
-        target: [aarch64-unknown-linux-gnu]
+    runs-on: ubuntu-22.04
 
-    runs-on: ${{ matrix.platform }}
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Debug project structure
+        run: |
+          echo "=== Project Structure ==="
+          find . -maxdepth 3 -type f -name "*.json" -o -name "*.toml" -o -name "*.rs" | sort
+          echo ""
+          echo "=== Root Directory ==="
+          ls -la
+          echo ""
+          echo "=== src-tauri Directory ==="
+          ls -la src-tauri/ || echo "src-tauri not found"
 
       - name: Setup QEMU
         uses: docker/setup-qemu-action@v3
@@ -33,7 +40,9 @@ jobs:
             dpkg \
             fakeroot \
             rpm \
-            gcc-aarch64-linux-gnu
+            gcc-aarch64-linux-gnu \
+            pkg-config \
+            libgtk-3-dev
 
       - name: Setup Node.js
         uses: actions/setup-node@v4
@@ -41,25 +50,40 @@ jobs:
           node-version: lts/*
           cache: 'npm'
 
-      - name: Install Rust
-        uses: dtolnay/rust-toolchain@stable
-
-      - name: Add ARM64 target
+      - name: Create minimal package.json if missing
         run: |
+          if [ ! -f "package.json" ]; then
+            echo "Creating minimal package.json..."
+            cat > package.json << 'EOF'
+            {
+              "name": "tauri-app",
+              "version": "1.0.0",
+              "private": true,
+              "scripts": {
+                "build": "echo 'No frontend build required'",
+                "dev": "echo 'No dev server'"
+              }
+            }
+            EOF
+          fi
+          npm install
+
+      - name: Install Rust and tools
+        run: |
+          curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y
+          source $HOME/.cargo/env
           rustup target add aarch64-unknown-linux-gnu
 
-      - name: Setup cargo config for cross-compilation
+      - name: Setup cross-compilation environment
         run: |
           mkdir -p .cargo
           cat > .cargo/config.toml << 'EOF'
           [target.aarch64-unknown-linux-gnu]
           linker = "aarch64-linux-gnu-gcc"
+          rustflags = ["-C", "link-arg=-Wl,-rpath,/usr/aarch64-linux-gnu/lib"]
           EOF
 
-      - name: Install frontend dependencies
-        run: npm install
-
-      - name: Setup ARM64 architecture
+      - name: Setup ARM64 architecture and libraries
         run: |
           sudo dpkg --add-architecture arm64
           # 添加 ARM64 软件源
@@ -67,30 +91,57 @@ jobs:
           echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted" | sudo tee -a /etc/apt/sources.list.d/arm64.list
           echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy universe" | sudo tee -a /etc/apt/sources.list.d/arm64.list
           echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates universe" | sudo tee -a /etc/apt/sources.list.d/arm64.list
+          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64.list
+          
           sudo apt-get update
-
-      - name: Install ARM64 libraries
-        run: |
           sudo apt-get install -y \
             libwebkit2gtk-4.1-dev:arm64 \
             libappindicator3-dev:arm64 \
             librsvg2-dev:arm64 \
-            libssl-dev:arm64
+            libssl-dev:arm64 \
+            libgtk-3-dev:arm64 \
+            libc6-dev:arm64
 
-      - name: Set up environment variables
+      - name: Test Rust compilation
         run: |
-          echo "PKG_CONFIG_SYSROOT_DIR=/usr/aarch64-linux-gnu/" >> $GITHUB_ENV
+          source $HOME/.cargo/env
+          echo "=== Testing Rust compilation ==="
+          cd src-tauri
+          cargo check --target aarch64-unknown-linux-gnu --verbose
+        continue-on-error: true
+
+      - name: Check environment variables
+        run: |
+          echo "=== Environment Variables ==="
+          echo "PKG_CONFIG_PATH: ${PKG_CONFIG_PATH:-not set}"
+          echo "PKG_CONFIG_SYSROOT_DIR: ${PKG_CONFIG_SYSROOT_DIR:-not set}"
+          echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: ${CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER:-not set}"
+
+      - name: Set cross-compilation environment
+        run: |
+          echo "PKG_CONFIG_SYSROOT_DIR=/usr/aarch64-linux-gnu" >> $GITHUB_ENV
+          echo "PKG_CONFIG_PATH=/usr/lib/aarch64-linux-gnu/pkgconfig" >> $GITHUB_ENV
           echo "CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER=aarch64-linux-gnu-gcc" >> $GITHUB_ENV
 
-      - name: Build Tauri application
+      - name: Build with detailed logging (尝试手动构建)
+        run: |
+          source $HOME/.cargo/env
+          cd src-tauri
+          # 先尝试构建 Rust 部分
+          echo "=== Building Rust dependencies ==="
+          cargo build --target aarch64-unknown-linux-gnu --verbose --release || echo "Build failed, continuing for diagnostics"
+        continue-on-error: true
+
+      - name: Build Tauri application (使用 tauri-action)
         uses: tauri-apps/tauri-action@v0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          PKG_CONFIG_SYSROOT_DIR: /usr/aarch64-linux-gnu/
+          PKG_CONFIG_SYSROOT_DIR: /usr/aarch64-linux-gnu
+          PKG_CONFIG_PATH: /usr/lib/aarch64-linux-gnu/pkgconfig
         with:
           tagName: app-v__VERSION__
           releaseName: 'App v__VERSION__'
           releaseBody: 'See the assets to download this version and install.'
           releaseDraft: true
           prerelease: false
-          args: '--target aarch64-unknown-linux-gnu'
+          args: '--target aarch64-unknown-linux-gnu --verbose'
