@@ -48,7 +48,6 @@ jobs:
       - name: Setup ARM64 architecture
         run: |
           sudo dpkg --add-architecture arm64
-          echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted" | sudo tee -a /etc/apt/sources.list.d/arm64.list
           sudo apt-get update
           sudo apt-get install -y libwebkit2gtk-4.1-dev:arm64 libssl-dev:arm64
       
