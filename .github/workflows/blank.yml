@@ -11,7 +11,7 @@ jobs:
         with:
           platforms: arm64
       
-      - name: Install system dependencies
+      - name: Install basic dependencies
         run: |
           sudo apt-get update
           sudo apt-get install -y \
@@ -41,12 +41,12 @@ jobs:
           echo '[target.aarch64-unknown-linux-gnu]' > .cargo/config.toml
           echo 'linker = "aarch64-linux-gnu-gcc"' >> .cargo/config.toml
       
-      - name: Setup ARM64 architecture and libraries
+      - name: Setup ARM64 libraries with correct sources
         run: |
           # 添加 ARM64 架构支持
           sudo dpkg --add-architecture arm64
           
-          # 添加 ARM64 软件源
+          # 使用正确的 ARM64 软件源
           echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy main restricted universe multiverse" | sudo tee /etc/apt/sources.list.d/arm64.list
           echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-updates main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64.list
           echo "deb [arch=arm64] http://ports.ubuntu.com/ubuntu-ports jammy-security main restricted universe multiverse" | sudo tee -a /etc/apt/sources.list.d/arm64.list
@@ -60,18 +60,12 @@ jobs:
             libappindicator3-dev:arm64 \
             librsvg2-dev:arm64 \
             libssl-dev:arm64 \
-            libc6-dev:arm64 \
-            libglib2.0-dev:arm64 \
-            libpango1.0-dev:arm64 \
-            libatk1.0-dev:arm64 \
-            libgdk-pixbuf2.0-dev:arm64
+            libglib2.0-dev:arm64
       
       - name: Build Tauri app
         run: npx @tauri-apps/cli build --target aarch64-unknown-linux-gnu --verbose
         env:
-          # 关键环境变量
           CARGO_TARGET_AARCH64_UNKNOWN_LINUX_GNU_LINKER: aarch64-linux-gnu-gcc
           PKG_CONFIG_SYSROOT_DIR: /usr/aarch64-linux-gnu
           PKG_CONFIG_PATH: /usr/lib/aarch64-linux-gnu/pkgconfig
           PKG_CONFIG_ALLOW_CROSS: 1
-          RUSTFLAGS: "-C link-arg=-Wl,-rpath-link,/usr/aarch64-linux-gnu/lib"
